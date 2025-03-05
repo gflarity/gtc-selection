@@ -1,123 +1,29 @@
 import { BinaryHeap } from "jsr:@deno-agents/async-binary-heap"
 import { Session } from "./lib/sessions.ts"
-import { completeWithSchema } from "jsr:@deno-agents/utils"
+import { getCmp } from "./comp.ts"
 
-// Initialize a cache to store comparison results
-const cache = new Map<string, number>()
-
-const heap = new BinaryHeap<Session>(async (a: Session, b: Session) => {
-    // Generate keys for both comparison orders
-    const keyAB = `${a.sessionID}_${b.sessionID}`
-    const keyBA = `${b.sessionID}_${a.sessionID}`
-
-    // Check if the result is cached for a vs. b
-    if (cache.has(keyAB)) {
-        console.log(`Cache hit for ${a.title} vs. ${b.title}`)
-        return cache.get(keyAB)!
-    }
-    // Check if the result is cached for b vs. a and negate it
-    else if (cache.has(keyBA)) {
-        console.log(`Cache hit for ${b.title} vs. ${a.title}`)
-        return -cache.get(keyBA)!
-    }
-    // If not cached, perform the comparison
-    else {
-        const schema = {
-            $schema: "http://json-schema.org/draft-07/schema#",
-            type: "object",
-            properties: {
-                result: {
-                    type: "integer",
-                    enum: [1, -1],
-                },
-            },
-            required: ["result"],
-            additionalProperties: false,
-        }
-
-        const systemPrompt =
-            "You are an expert at comparing GTC conference sessions given their titles and abstracts."
-        const model = "deepseek-ai/DeepSeek-R1"
-        const userPrompt =
-            `You will analyze Titles & Abstracts of two GTC sessions (A and B) to determine which better emphasizes cost reduction, efficiency improvements, and aligns with the following success criteria:
-
-Greater Impact/Optimization Focus: More actionable strategies addressing measurable cost reduction and time/resource efficiency in AI/ML workflows, deployments, or applications. Prioritizes metrics/evidence of concrete benefits over superficial buzz.
-Less Self-Promotion: Avoids hyperbole/pricing-focused selling; highlights challenges/successes usable across models/tools/organizations.
-Broader Applicability: Solutions/insights apply broadly (multiple domains or framework-agnostic) vs. niche/hardware-specific optimizations or verticals.
-⤷ For authenticity: Penalize vague/generic phrases; reward specific frameworks, real-world examples, and caveats acknowledging limits.
-
-Template for Analysis
-Step-by-Step Instructions:
-
-Analyze Criteria for Section A - Assign scores ((1-5): Cost/Efficiency Emphasis | Avoidance of Self-Promotion | Accessibility Generality | Supported Claims.
-
-Analyze Criteria for Section B - Same framework.
-  (Compare relative strengths for each criteria).
-
-Make Final Call. Consider:
-
-• Does A/B discuss actual financial metrics (e.g., 20%↑ inference speed) rather than ROI hype?
-• Did one omit practical implementation roadblocks? (= possible overselling sign).
-• If A focuses on custom ASIC chip design & B improves PyTorch pipeline design → B has wider ML impact.
-
-VERDICT Format → {-1 if A>B, 1 if B>=A}: {{Return only "-1" or "1" without explanation.}}
-
-Sessions Provided: ` +
-            "Title for paper a: ```" +
-            a.title +
-            "``` " +
-            "Abstract for paper a: ```" +
-            a.abstract +
-            "``` " +
-            "Title for paper b: ```" +
-            b.title +
-            "``` " +
-            "Abstract for paper b: ```" +
-            b.abstract +
-            "```"
-
-        console.log(`Comparing ${a.title} with ${b.title}`)
-        const [content, reasoning] = await completeWithSchema(
-            Deno.env.get("CENTML_API_KEY")!,
-            "https://api.centml.com/openai/v1",
-            schema,
-            systemPrompt,
-            userPrompt,
-            model
-        )
-
-        console.log("reasoning", reasoning)
-        console.log("content", content)
-        const obj = JSON.parse(content)
-        const result = obj.result
-
-        // Cache the result for a vs. b
-        cache.set(keyAB, result)
-        return result
-    }
-})
+const heap = new BinaryHeap<Session>(getCmp())
 
 // Load up the sessions
-const json = await Deno.readFile(
-    "./filtered-sessions-second-pass-with-DSR1-prompt.json"
-)
-let sessions = JSON.parse(new TextDecoder().decode(json)) as Session[]
+const json = await Deno.readFile("./filtered-heaped-sessions.json")
+const sessions = JSON.parse(new TextDecoder().decode(json)) as Session[]
 
 // Push all sessions into the heap
-for (const session of sessions) {
-    await heap.push(session)
-}
-
-// Heap sort to get the sessions in order of importance
-const sorted = []
 for (let i = 0; i < sessions.length; i++) {
-    sorted.push(await heap.pop())
+    const session = sessions[i]
+    await heap.push(session)
+    console.log(`Pushed session ${i} into the heap`)
 }
 
-// Write the sorted sessions to a file
-await Deno.writeFile(
-    "./sorted-sessions-second-pass-with-DSR1-prompt.json",
-    new TextEncoder().encode(JSON.stringify(sorted, null, 2))
-)
+const topTen: Session[] = []
+for (let i = 0; i < 10; i++) {
+    const session = await heap.pop()
+    if (!session) break
+    topTen.push(session)
+    console.log(`Popped session ${i} from the heap`)
+}
 
-console.log("done")
+Deno.writeFile(
+    "./top-ten-sessions.json",
+    new TextEncoder().encode(JSON.stringify(topTen, null, 2))
+)
